@@ -9,13 +9,15 @@ After changing CHUNK_SIZE, CHUNK_OVERLAP or EMBEDDING_MODEL, rebuild the vector 
 DB_NAME = "vector_db"
 
 # Chunking (ingest.py)
-CHUNK_SIZE = 1500
-CHUNK_OVERLAP = 300
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 100
 
 # Embeddings: must be the same model at ingest time and at question time.
 # Pick one from the list below. Names starting with "openrouter:" go through the
 # OpenRouter API (paid, uses OPENROUTER_API_KEY); the rest run locally for free.
-EMBEDDING_MODEL = "openrouter:openai/text-embedding-3-large"
+
+# EMBEDDING_MODEL = "openrouter:openai/text-embedding-3-large"
+EMBEDDING_MODEL = "all-miniLm-L6-v2" 
 
 # --- Local (HuggingFace, free, downloaded on first use) ---
 #   "all-MiniLM-L6-v2"                          RAG v1. Small and fast, reads ~256 tokens per chunk
@@ -38,12 +40,13 @@ ANSWER_MODEL = "openai/gpt-4.1-nano"
 def get_embeddings():
     """Build the embedding model named in EMBEDDING_MODEL.
     ingest.py and answer.py both call this, so they always use the same one."""
+    from dotenv import load_dotenv
+    load_dotenv(override=True) 
+
     if EMBEDDING_MODEL.startswith("openrouter:"):
         import os
-        from dotenv import load_dotenv
         from langchain_openai import OpenAIEmbeddings
 
-        load_dotenv(override=True)
         return OpenAIEmbeddings(
             model=EMBEDDING_MODEL.removeprefix("openrouter:"),
             base_url=OPENROUTER_BASE_URL,

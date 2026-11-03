@@ -1,0 +1,102 @@
+so these are the results i got
+
+(baseline)
+
+acc - 4.18 / 5
+comp - 3.91 / 5
+rel - 4.82 / 5	
+
+acc - 4.15 / 5
+comp - 3.76 / 5
+rel - 4.79 / 5	
+
+acc - 4.24 / 5
+comp - 3.82 / 5
+rel - 4.76 / 5	
+
+(RAG) - chunk - 1000 , overlap - 200 , model - all-miniLm-L6-v2 , k-10
+
+source MRR - 0.66
+nDCG - 0.69
+keyword MRR - 0.51
+page coverage - 0.70
+keyword coverage - 0.69
+
+acc - 4.24 / 5
+comp - 3.91 / 5
+rel - 4.70 / 5
+
+(RAG) - chunk - 1000 , overlap - 200 , model - all-miniLm-L6-v2 , k-15
+
+source MRR - 0.66
+nDCG - 0.69
+keyword MRR - 0.51
+page coverage - 0.70
+keyword coverage - 0.69
+
+acc - 4.03 / 5
+comp - 3.79 / 5
+rel - 4.64 / 5
+
+(RAG) - chunk - 1000 , overlap - 200 , model - all-miniLm-L6-v2 , k-5
+
+source MRR - 0.66
+nDCG - 0.69
+keyword MRR - 0.51
+page coverage - 0.70
+keyword coverage - 0.69
+
+acc - 4.12 / 5
+comp - 3.91 / 5
+rel - 4.64 / 5
+
+(RAG) - chunk - 500 , overlap - 100 , model - all-miniLm-L6-v2 , k-10
+
+source MRR - 0.63
+nDCG - 0.69
+keyword MRR - 0.41
+page coverage - 0.70
+keyword coverage - 0.70
+
+acc - 3.82 / 5
+comp - 3.54 / 5
+rel - 4.42 / 5
+
+(RAG) - chunk - 1500 , overlap - 300 , model - all-miniLm-L6-v2 , k-10
+
+source MRR - 0.69
+nDCG - 0.50
+keyword MRR - 0.50
+page coverage - 0.72
+keyword coverage - 0.75
+
+acc - 4.24 / 5
+comp - 3.91 / 5
+rel - 4.76 / 5
+
+(RAG) - chunk - 1500 , overlap - 300 , model - text-embedding-3-large , k-10
+
+source MRR - 0.64
+nDCG - 0.67
+keyword MRR - 0.45
+page coverage - 0.72
+keyword coverage - 0.74
+
+acc - 4.15 / 5
+comp - 3.94 / 5
+rel - 4.67 / 5
+
+(RAG) - chunk - 1000 , overlap - 200 , model - text-embedding-3-large , k-10
+
+source MRR - 0.72
+nDCG - 0.73
+keyword MRR - 0.55
+page coverage - 0.70
+keyword coverage - 0.74
+
+acc - 4.21 / 5
+comp - 3.97 / 5
+rel - 4.49 / 5
+
+
+

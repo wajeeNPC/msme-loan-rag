@@ -57,9 +57,6 @@ print(len(md_docs))
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE , chunk_overlap=CHUNK_OVERLAP)
 pdf_chunks = text_splitter.split_documents(pdf_docs)
 
-print(f"Divided into {len(pdf_chunks)} chunks")
-print(f"First chunk:\n\n{pdf_chunks[0]}")
-
 
 all_chunks = pdf_chunks + md_docs
 

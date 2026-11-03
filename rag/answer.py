@@ -9,6 +9,7 @@ from langchain_core.documents import Document
 
 
 from rag.config import DB_NAME, RETRIEVAL_K, ANSWER_MODEL, get_embeddings
+from rag import usage
 
 MODEL = ANSWER_MODEL
 RETRIVEL_K = RETRIEVAL_K
@@ -74,6 +75,8 @@ def answer_question(question: str, history):
     system_prompt = SYSTEM_PROMPT.format(context=context , today=today)
     messages = [SystemMessage(content=system_prompt)] + convert_history(history) + [HumanMessage(content=question)]
     response = llm.invoke(messages)
+    meta = response.usage_metadata or {}
+    usage.record(meta.get("input_tokens"), meta.get("output_tokens"))
     return response.content , docs
 
 def chat(question : str , history):

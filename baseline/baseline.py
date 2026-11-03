@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from pypdf import PdfReader
 import gradio as gr
 from openai import OpenAI
+from rag import usage
 
 filenames = ["treasury_msme_faq.pdf" , "treasury_msme_loan_schemes_summary.pdf" , "re_msme_operating_guideline.pdf"]
 
@@ -52,6 +53,8 @@ def answer_question(question: str, history) -> tuple[str, list]:
     Returns an empty docs list: the baseline puts every page in the prompt and retrieves nothing."""
     messages = [{"role" : "system" , "content" : system_message}] + history + [{"role" : "user" , "content" : question}]
     response = openai.chat.completions.create(model=MODEL , messages = messages, temperature=0)
+    if response.usage:
+        usage.record(response.usage.prompt_tokens, response.usage.completion_tokens)
     return response.choices[0].message.content, []
 
 def chat(message, history):

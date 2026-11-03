@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from eval.test import TestQuestion , load_tests , Source
 from rag.answer import answer_question , fetch_context
 from rag import config as rag_config
+from rag import usage
 from eval.runs import make_run, save_run
 from langchain_core.documents import Document
 
@@ -132,10 +133,13 @@ correct answer declines or hedges as the reference describes; inventing specific
 a guarantee of approval, a scheme not in the documents) is wrong and must score accuracy 1."""
 
 
-def evaluate_answer(test: TestQuestion, answer_fn=answer_question) -> tuple[AnswerEval, str, list[Document]]:
+def evaluate_answer(test: TestQuestion, answer_fn=answer_question) -> tuple[AnswerEval, str, list[Document], dict]:
     """Get an answer from answer_fn (RAG by default, or the baseline), then have an LLM grade it.
-    answer_fn(question, history) must return (answer_text, docs)."""
+    answer_fn(question, history) must return (answer_text, docs). The last item returned is the
+    tokens spent producing the answer (collected by rag.usage; the judge's tokens are not counted)."""
+    usage.reset()
     generated_answer, docs = answer_fn(test.question, [])
+    tokens = usage.snapshot()
 
     user_prompt = f"""Question type: {test.type}
 
@@ -164,7 +168,7 @@ Give concise feedback and a score from 1 (very poor) to 5 (ideal) for each."""
         response_format=AnswerEval,
     )
     answer_eval = AnswerEval.model_validate_json(response.choices[0].message.content)
-    return answer_eval, generated_answer, docs
+    return answer_eval, generated_answer, docs, tokens
 
 
 def average(values: list[float]) -> float:
@@ -203,17 +207,18 @@ def run_retrieval_eval(tests: list[TestQuestion]) -> list[tuple[TestQuestion, Re
     return scored
 
 
-def run_answer_eval(tests: list[TestQuestion], answer_fn=answer_question) -> list[tuple[TestQuestion, AnswerEval, str]]:
+def run_answer_eval(tests: list[TestQuestion], answer_fn=answer_question) -> list[tuple[TestQuestion, AnswerEval, str, dict]]:
     """LLM-judge every question. Costs 2 LLM calls per question (answer + judge).
-    Returns (test, judge result, generated answer) so the run can be saved."""
+    Returns (test, judge result, generated answer, tokens) so the run can be saved."""
     by_category = defaultdict(list)
     scored = []
-    print(f"\n{'ID':<5} {'Category':<20} {'Acc':>4} {'Comp':>5} {'Rel':>4}")
+    print(f"\n{'ID':<5} {'Category':<20} {'Acc':>4} {'Comp':>5} {'Rel':>4} {'Tokens':>8}")
     for test in tests:
-        result, generated_answer, _ = evaluate_answer(test, answer_fn)
+        result, generated_answer, _, tokens = evaluate_answer(test, answer_fn)
         by_category[test.category].append(result)
-        scored.append((test, result, generated_answer))
-        print(f"{test.id:<5} {test.category:<20} {result.accuracy:>4.1f} {result.completeness:>5.1f} {result.relevance:>4.1f}")
+        scored.append((test, result, generated_answer, tokens))
+        print(f"{test.id:<5} {test.category:<20} {result.accuracy:>4.1f} {result.completeness:>5.1f} {result.relevance:>4.1f} "
+              f"{tokens['total_tokens']:>8,}")
 
     print(f"\n{'Category':<20} {'n':>3} {'Acc':>5} {'Comp':>5} {'Rel':>5}")
     all_results = [r for results in by_category.values() for r in results]
@@ -222,6 +227,10 @@ def run_answer_eval(tests: list[TestQuestion], answer_fn=answer_question) -> lis
               f"{average([r.accuracy for r in results]):>5.2f} "
               f"{average([r.completeness for r in results]):>5.2f} "
               f"{average([r.relevance for r in results]):>5.2f}")
+    print(f"\nTokens per question (answer only, judge not counted): "
+          f"avg {average([t['total_tokens'] for _, _, _, t in scored]):,.0f} "
+          f"({average([t['prompt_tokens'] for _, _, _, t in scored]):,.0f} in, "
+          f"{average([t['completion_tokens'] for _, _, _, t in scored]):,.0f} out)")
     return scored
 
 
@@ -243,7 +252,8 @@ def run_single(test: TestQuestion, answer_fn=answer_question, with_retrieval: bo
                   f"Files {result.file_found}/{result.total_files}   Pages {result.pages_found}/{result.total_pages}")
 
     print(f"\n--- Answer ---")
-    answer_result, generated_answer, docs = evaluate_answer(test, answer_fn)
+    answer_result, generated_answer, docs, tokens = evaluate_answer(test, answer_fn)
+    print(f"Tokens: {tokens['total_tokens']:,} ({tokens['prompt_tokens']:,} in, {tokens['completion_tokens']:,} out, {tokens['calls']} LLM call(s))")
     print("Retrieved:", [f"{os.path.basename(d.metadata.get('source', ''))} p{d.metadata.get('page', -1) + 1}" for d in docs])
     print(f"\n{generated_answer}")
     print(f"\nReference: {test.reference_answer}")
@@ -260,12 +270,12 @@ def evaluate_all_retrieval():
 
 
 def evaluate_all_answers(answer_fn=answer_question):
-    """Generator for the dashboard: yields (test, AnswerEval, generated answer, progress).
+    """Generator for the dashboard: yields (test, AnswerEval, generated answer, tokens, progress).
     2 LLM calls per question."""
     tests = load_tests()
     for index, test in enumerate(tests):
-        result, generated_answer, _ = evaluate_answer(test, answer_fn)
-        yield test, result, generated_answer, (index + 1) / len(tests)
+        result, generated_answer, _, tokens = evaluate_answer(test, answer_fn)
+        yield test, result, generated_answer, tokens, (index + 1) / len(tests)
 
 
 def get_answer_fn(pipeline: str):

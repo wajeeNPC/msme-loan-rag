@@ -22,7 +22,8 @@ def _average(values: list[float]) -> float:
 def make_run(name: str, pipeline: str, config: dict, retrieval=None, answers=None) -> dict:
     """Build a run record.
     retrieval: list of (TestQuestion, RetrivalEval)        - None for the baseline
-    answers:   list of (TestQuestion, AnswerEval, answer)  - None for a retrieval-only run
+    answers:   list of (TestQuestion, AnswerEval, answer, tokens) - None for a retrieval-only run
+               (tokens = rag.usage.snapshot() for that question)
     """
     run = {
         "name": name,
@@ -48,11 +49,17 @@ def make_run(name: str, pipeline: str, config: dict, retrieval=None, answers=Non
         questions = [
             {"id": t.id, "category": t.category, "type": t.type, "question": t.question,
              **{m: getattr(r, m) for m in ANSWER_METRICS},
-             "feedback": r.feedback, "answer": answer}
-            for t, r, answer in answers
+             "feedback": r.feedback, "answer": answer, **tokens}
+            for t, r, answer, tokens in answers
         ]
         run["answers"] = {
             "overall": {m: _average([q[m] for q in questions]) for m in ANSWER_METRICS},
+            "tokens": {
+                "avg_prompt": _average([q["prompt_tokens"] for q in questions]),
+                "avg_completion": _average([q["completion_tokens"] for q in questions]),
+                "avg_total": _average([q["total_tokens"] for q in questions]),
+                "total": sum(q["total_tokens"] for q in questions),
+            },
             "questions": questions,
         }
     return run
