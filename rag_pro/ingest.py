@@ -1,6 +1,5 @@
 import os
 import difflib
-from pathlib import Path
 from openai import OpenAI
 from dotenv import load_dotenv
 from pypdf import PdfReader
@@ -12,6 +11,8 @@ from litellm import completion
 from tenacity import retry, wait_exponential , stop_after_attempt
 from concurrent.futures import ThreadPoolExecutor
 
+from rag_pro.config import DB_NAME, COLLECTION_NAME, CHUNK_MODEL, AVERAGE_CHUNK_SIZE, EMBEDDING_MODEL
+
 load_dotenv(override=True)
 openrouter_api_key = os.getenv('OPENROUTER_API_KEY')
 if openrouter_api_key:
@@ -19,18 +20,11 @@ if openrouter_api_key:
 else:
     print("OpenRouter API key not set")
 
-MODEL = "openrouter/openai/gpt-4.1-nano"
-
-DB_NAME = str(Path(__file__).parent.parent / "vector_pro_db")
-collection_name = "docs"
-embedding_model = "openai/text-embedding-3-large"
-
 PDF_FILENAMES = ["treasury_msme_faq.pdf"  , "re_msme_operating_guideline.pdf"]
 SUMMARY_MD = "data/processed/loan_schemes_summary.md"
 SUMMARY_PDF = "treasury_msme_loan_schemes_summary.pdf"
 
-AVERAGE_CHUNK_SIZE = 500
-wait = wait_exponential(multiplier=1, min=10 , max=240)
+wait =wait_exponential(multiplier=1, min=10 , max=240)
 WORKERS = 3
 
 openrouter = OpenAI(base_url="https://openrouter.ai/api/v1" , api_key=openrouter_api_key)
@@ -172,7 +166,7 @@ def check_chunk(chunk_text: str, page_text: str) -> str | None:
 @retry(wait=wait, stop=stop_after_attempt(5), reraise=True)
 def process_page(page):
     messages = make_messages(page)
-    response = completion(model=MODEL, messages=messages, response_format=Chunks)
+    response = completion(model=CHUNK_MODEL, messages=messages, response_format=Chunks)
     reply = response.choices[0].message.content
     page_as_chunks = Chunks.model_validate_json(reply).chunks
 
@@ -195,14 +189,14 @@ def create_chunks(pages):
 
 def create_embeddings(chunks):
     chroma = PersistentClient(path=DB_NAME)
-    if collection_name in [c.name for c in chroma.list_collections()]:
-        chroma.delete_collection(collection_name)
+    if COLLECTION_NAME in [c.name for c in chroma.list_collections()]:
+        chroma.delete_collection(COLLECTION_NAME)
 
     texts = [chunk.page_content for chunk in chunks]
-    emb = openrouter.embeddings.create(model=embedding_model, input=texts).data
+    emb = openrouter.embeddings.create(model=EMBEDDING_MODEL, input=texts).data
     vectors = [e.embedding for e in emb]
 
-    collection = chroma.get_or_create_collection(collection_name)
+    collection = chroma.get_or_create_collection(COLLECTION_NAME)
 
     ids = [str(i) for i in range(len(chunks))]
     metas = [chunk.metadata for chunk in chunks]

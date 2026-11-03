@@ -88,13 +88,14 @@ def fraction(found: int, total: int) -> float:
     return found / total if total else 0.0
 
 
-def evaluate_retrieval(test: TestQuestion) -> RetrivalEval | None:
+def evaluate_retrieval(test: TestQuestion, fetch_fn=fetch_context) -> RetrivalEval | None:
     """Score retrieval for one question. Returns None when there is nothing to find
-    (questions like Q29/Q32/Q33 with no keywords and no expected sources)."""
+    (questions like Q29/Q32/Q33 with no keywords and no expected sources).
+    fetch_fn(question) must return chunks with .page_content and .metadata (source, page)."""
     if not test.keywords and not test.expected_sources:
         return None
 
-    docs = fetch_context(test.question)
+    docs = fetch_fn(test.question)
 
     # Keywords: one MRR per keyword, then average
     keyword_scores = [calculate_keyword_mrr(kw, docs) for kw in test.keywords]
@@ -175,15 +176,16 @@ def average(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
-def run_retrieval_eval(tests: list[TestQuestion]) -> list[tuple[TestQuestion, RetrivalEval]]:
-    """Retrieval metrics for every question, grouped by category. No LLM calls, so it's free.
+def run_retrieval_eval(tests: list[TestQuestion], fetch_fn=fetch_context) -> list[tuple[TestQuestion, RetrivalEval]]:
+    """Retrieval metrics for every question, grouped by category. No LLM calls for RAG v1
+    (RAG Pro makes some when query rewriting or reranking is on).
     Returns (test, result) pairs so the run can be saved."""
     by_category = defaultdict(list)
     scored = []
     skipped = []
     print(f"\n{'ID':<5} {'Category':<20} {'kwMRR':>6} {'srcMRR':>7} {'nDCG':>6} {'kw':>6} {'pages':>6}")
     for test in tests:
-        result = evaluate_retrieval(test)
+        result = evaluate_retrieval(test, fetch_fn)
         if result is None:
             skipped.append(test.id)
             continue
@@ -234,16 +236,17 @@ def run_answer_eval(tests: list[TestQuestion], answer_fn=answer_question) -> lis
     return scored
 
 
-def run_single(test: TestQuestion, answer_fn=answer_question, with_retrieval: bool = True) -> None:
-    """Full detail for one question: retrieval metrics (RAG only), the generated answer, and the judge's verdict."""
+def run_single(test: TestQuestion, answer_fn=answer_question, fetch_fn=fetch_context) -> None:
+    """Full detail for one question: retrieval metrics (skipped when fetch_fn is None, i.e. the
+    baseline), the generated answer, and the judge's verdict."""
     print(f"\n{'=' * 80}\n{test.id} [{test.category} / {test.type}]\n{'=' * 80}")
     print(f"Question: {test.question}")
     print(f"Keywords: {test.keywords}")
     print(f"Expected: {[f'{s.file} p{s.page}' for s in test.expected_sources]}")
 
-    if with_retrieval:
+    if fetch_fn is not None:
         print(f"\n--- Retrieval ---")
-        result = evaluate_retrieval(test)
+        result = evaluate_retrieval(test, fetch_fn)
         if result is None:
             print("Skipped (no keywords or expected sources)")
         else:
@@ -261,12 +264,12 @@ def run_single(test: TestQuestion, answer_fn=answer_question, with_retrieval: bo
     print(f"Accuracy {answer_result.accuracy}/5   Completeness {answer_result.completeness}/5   Relevance {answer_result.relevance}/5\n")
 
 
-def evaluate_all_retrieval():
+def evaluate_all_retrieval(fetch_fn=fetch_context):
     """Generator for the dashboard: yields (test, result, progress) one question at a time.
     result is None for questions with nothing to retrieve."""
     tests = load_tests()
     for index, test in enumerate(tests):
-        yield test, evaluate_retrieval(test), (index + 1) / len(tests)
+        yield test, evaluate_retrieval(test, fetch_fn), (index + 1) / len(tests)
 
 
 def evaluate_all_answers(answer_fn=answer_question):
@@ -279,12 +282,25 @@ def evaluate_all_answers(answer_fn=answer_question):
 
 
 def get_answer_fn(pipeline: str):
-    """'rag' or 'baseline' -> the answer_question function to grade."""
+    """'rag', 'rag_pro' or 'baseline' -> the answer_question function to grade."""
     if pipeline == "baseline":
         # Imported only here: it reads every PDF page into memory on import
         from baseline.baseline import answer_question as baseline_answer
         return baseline_answer
+    if pipeline == "rag_pro":
+        from rag_pro.answer import answer_question as pro_answer
+        return pro_answer
     return answer_question
+
+
+def get_fetch_fn(pipeline: str):
+    """The pipeline's retrieval function, or None for the baseline (it retrieves nothing)."""
+    if pipeline == "baseline":
+        return None
+    if pipeline == "rag_pro":
+        from rag_pro.answer import fetch_context as pro_fetch
+        return pro_fetch
+    return fetch_context
 
 
 def run_config(pipeline: str) -> dict:
@@ -292,6 +308,9 @@ def run_config(pipeline: str) -> dict:
     if pipeline == "baseline":
         from baseline.baseline import MODEL as baseline_model
         config = {"context": "all pages in prompt (no retrieval)", "answer_model": baseline_model}
+    elif pipeline == "rag_pro":
+        from rag_pro import config as pro_config
+        config = pro_config.as_dict()
     else:
         config = rag_config.as_dict()
     config["judge_model"] = JUDGE_MODEL
@@ -304,9 +323,12 @@ USAGE = """Usage (run from the project root):
   python -m eval.eval Q07                   full detail for one question
   python -m eval.eval --baseline            LLM-judge the no-RAG baseline on every question
   python -m eval.eval --baseline Q07        full baseline detail for one question
+  python -m eval.eval --pro [--answers]     the same for RAG Pro (flags in rag_pro/config.py)
+  python -m eval.eval --pro Q07             full RAG Pro detail for one question
 
 Add --save "name" to any full run to keep it for the dashboard (results/runs/), e.g.
   python -m eval.eval --answers --save "rag-v1"
+  python -m eval.eval --pro --answers --save "rag-pro-chunking"
   python -m eval.eval --baseline --save "baseline"
 (The baseline retrieves nothing, so it only gets answer scores.)"""
 
@@ -325,10 +347,11 @@ def main():
         save_name = args[i + 1]
         args = args[:i] + args[i + 2:]
 
-    pipeline = "baseline" if "--baseline" in args else "rag"
+    pipeline = "baseline" if "--baseline" in args else "rag_pro" if "--pro" in args else "rag"
     with_answers = "--answers" in args or pipeline == "baseline"
-    rest = [a for a in args if a not in ("--baseline", "--answers")]
+    rest = [a for a in args if a not in ("--baseline", "--pro", "--answers")]
     answer_fn = get_answer_fn(pipeline)
+    fetch_fn = get_fetch_fn(pipeline)
 
     # One question in detail
     if len(rest) == 1 and not rest[0].startswith("--"):
@@ -338,14 +361,14 @@ def main():
             sys.exit(1)
         if save_name:
             print("(--save is ignored for single-question runs)")
-        run_single(matches[0], answer_fn, with_retrieval=(pipeline == "rag"))
+        run_single(matches[0], answer_fn, fetch_fn)
         return
     if rest:
         print(USAGE)
         sys.exit(1)
 
     # Full runs
-    retrieval = run_retrieval_eval(tests) if pipeline == "rag" else None
+    retrieval = run_retrieval_eval(tests, fetch_fn) if fetch_fn else None
     answers = run_answer_eval(tests, answer_fn) if with_answers else None
 
     if save_name:

@@ -18,8 +18,9 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from eval.eval import (
-    evaluate_all_retrieval, evaluate_all_answers, get_answer_fn, run_config,
+    evaluate_all_retrieval, evaluate_all_answers, get_answer_fn, get_fetch_fn, run_config,
 )
+from rag_pro import config as pro_config
 from eval.runs import make_run, save_run, load_runs, RETRIEVAL_METRICS, ANSWER_METRICS
 
 load_dotenv(override=True)
@@ -33,7 +34,8 @@ COLORS = {"green": "#22c55e", "amber": "#f59e0b", "red": "#ef4444"}
 LEVEL_WORDS = {COLORS["green"]: "Good", COLORS["amber"]: "Fair", COLORS["red"]: "Weak"}
 BANNER_COLORS = {"idle": "#94a3b8", "running": "#3b82f6", "done": "#22c55e",
                  "warn": "#f59e0b", "error": "#ef4444"}
-PIPELINE_COLORS = {"baseline": "#94a3b8", "rag": "#2563eb"}
+PIPELINE_COLORS = {"baseline": "#94a3b8", "rag": "#2563eb", "rag_pro": "#7c3aed"}
+PIPELINES = {"RAG": "rag", "RAG Pro": "rag_pro", "Baseline": "baseline"}   # radio label -> run["pipeline"]
 
 METRIC_NAMES = {
     "source_mrr": "Source MRR", "ndcg": "nDCG", "keyword_mrr": "Keyword MRR",
@@ -41,7 +43,7 @@ METRIC_NAMES = {
     "accuracy": "Accuracy", "completeness": "Completeness", "relevance": "Relevance",
 }
 
-RETRIEVAL_LABEL = "Retrieval only (free, RAG only)"
+RETRIEVAL_LABEL = "Retrieval only (no answers or judge)"
 
 PLACEHOLDER = "<div style='padding: 20px; text-align: center; opacity: 0.6;'>Nothing to show yet</div>"
 
@@ -118,6 +120,10 @@ def settings_text(run: dict) -> str:
     c = run.get("config", {})
     if run["pipeline"] == "baseline":
         return f"no retrieval · {c.get('answer_model', '?')}"
+    if run["pipeline"] == "rag_pro":
+        on_off = lambda flag: "on" if c.get(flag) else "off"
+        return (f"LLM chunks · rewrite {on_off('query_rewrite')} · rerank {on_off('rerank')} · "
+                f"k={c.get('final_k')} · {c.get('embedding_model')} · {c.get('answer_model')}")
     return (f"{c.get('chunk_size')}/{c.get('chunk_overlap')} · {c.get('embedding_model')} · "
             f"k={c.get('retrieval_k')} · {c.get('answer_model')}")
 
@@ -211,7 +217,7 @@ def run_frame(status: str, run: dict | None = None, running: bool = False, pipel
     finished = run is not None and not running
     return (status, run, *retrieval_view(run), *answer_view(run),
             gr.update(visible=finished), "",
-            gr.update(interactive=not running and pipeline == "rag"),
+            gr.update(interactive=not running and pipeline != "baseline"),
             gr.update(interactive=not running))
 
 
@@ -220,8 +226,11 @@ def progress_frame(step: str, detail: str, pct: float):
     return (banner("running", f"{step} · {pct:.0%}", detail, pct), *[gr.skip()] * (N_RUN_OUTPUTS - 1))
 
 
-def run_eval(pipeline_label: str, with_answers: bool):
-    pipeline = "baseline" if pipeline_label == "Baseline" else "rag"
+def run_eval(pipeline_label: str, with_answers: bool, rewrite: bool = False, rerank: bool = False):
+    pipeline = PIPELINES[pipeline_label]
+    # rag_pro reads its flags on every question, so setting them here applies to this run
+    # (and run_config saves them with it)
+    pro_config.USE_QUERY_REWRITE, pro_config.USE_RERANK = rewrite, rerank
     if pipeline == "baseline" and not with_answers:
         yield run_frame(banner("warn", "The baseline has no retrieval step to score",
                                "It puts every page in the prompt. Use Full evaluation to score its answers."),
@@ -232,11 +241,13 @@ def run_eval(pipeline_label: str, with_answers: bool):
         yield run_frame(banner("running", "Starting", "Loading the pipeline", 0.0), None, True, pipeline)
 
         retrieval, answer_start = None, 0.0
-        if pipeline == "rag":
+        if pipeline != "baseline":
             retrieval = []
             answer_start = 0.2 if with_answers else 1.0
-            for test, result, prog in evaluate_all_retrieval():
-                yield progress_frame("Retrieval", f"{test.id} · free, no LLM calls", prog * answer_start)
+            uses_llm = pipeline == "rag_pro" and (rewrite or rerank)
+            for test, result, prog in evaluate_all_retrieval(get_fetch_fn(pipeline)):
+                yield progress_frame("Retrieval", f"{test.id} · {'rewrite/rerank LLM calls' if uses_llm else 'no LLM calls'}",
+                                     prog * answer_start)
                 if result is not None:
                     retrieval.append((test, result))
 
@@ -260,12 +271,12 @@ def run_eval(pipeline_label: str, with_answers: bool):
                     run, pipeline=pipeline)
 
 
-def run_retrieval_only(pipeline_label: str):
-    yield from run_eval(pipeline_label, False)
+def run_retrieval_only(pipeline_label: str, rewrite: bool, rerank: bool):
+    yield from run_eval(pipeline_label, False, rewrite, rerank)
 
 
-def run_full(pipeline_label: str):
-    yield from run_eval(pipeline_label, True)
+def run_full(pipeline_label: str, rewrite: bool, rerank: bool):
+    yield from run_eval(pipeline_label, True, rewrite, rerank)
 
 
 def save_current_run(run: dict | None, name: str):
@@ -438,8 +449,14 @@ def main():
             current_run = gr.State(None)
 
             gr.Markdown("#### 1. Choose a system")
-            pipeline = gr.Radio(["RAG", "Baseline"], value="RAG", label="System to evaluate",
-                                info="RAG searches the PDFs. Baseline puts every page in the prompt.")
+            pipeline = gr.Radio(list(PIPELINES), value="RAG", label="System to evaluate",
+                                info="RAG searches fixed-size chunks. RAG Pro searches LLM-made chunks. "
+                                     "Baseline puts every page in the prompt.")
+            with gr.Row(visible=False) as pro_options:
+                pro_rewrite = gr.Checkbox(pro_config.USE_QUERY_REWRITE, label="Query rewriting",
+                                          info="+1 LLM call per question: also searches with a rewritten query")
+                pro_rerank = gr.Checkbox(pro_config.USE_RERANK, label="Reranking",
+                                         info="+1 LLM call per question: LLM sorts 20 candidates, keeps the best 10")
 
             gr.Markdown("#### 2. Run")
             with gr.Row():
@@ -452,7 +469,7 @@ def main():
                 with gr.Row(equal_height=True):
                     save_name = gr.Textbox(label="Run name", scale=3,
                                            info="Saved runs feed the Progress and Compare tabs.",
-                                           placeholder="e.g. rag-v1, baseline, exp-date-in-prompt")
+                                           placeholder="e.g. rag-v1, rag-pro-rerank, baseline")
                     save_button = gr.Button("Save run", scale=1)
                 save_status = gr.HTML("")
 
@@ -490,12 +507,14 @@ def main():
                        save_box, save_status, retrieval_button, full_button]
 
         # The banner is the one source of progress feedback, so Gradio's own overlay is hidden.
-        retrieval_button.click(run_retrieval_only, inputs=pipeline, outputs=run_outputs, show_progress="hidden")
-        full_button.click(run_full, inputs=pipeline, outputs=run_outputs, show_progress="hidden")
+        run_inputs = [pipeline, pro_rewrite, pro_rerank]
+        retrieval_button.click(run_retrieval_only, inputs=run_inputs, outputs=run_outputs, show_progress="hidden")
+        full_button.click(run_full, inputs=run_inputs, outputs=run_outputs, show_progress="hidden")
         pipeline.change(
-            lambda p: gr.update(interactive=p == "RAG",
-                                value=RETRIEVAL_LABEL if p == "RAG" else "Retrieval only (not available for Baseline)"),
-            inputs=pipeline, outputs=retrieval_button, show_progress="hidden")
+            lambda p: (gr.update(interactive=p != "Baseline",
+                                 value=RETRIEVAL_LABEL if p != "Baseline" else "Retrieval only (not available for Baseline)"),
+                       gr.update(visible=p == "RAG Pro")),
+            inputs=pipeline, outputs=[retrieval_button, pro_options], show_progress="hidden")
 
         gr.on(
             triggers=[save_button.click, save_name.submit],
