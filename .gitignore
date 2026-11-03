@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets (API keys)
+.env
+
+# Generated vector store (rebuild with: python -m rag.ingest)
+vector_db/
+
+# Claude Code working rules (local only)
+CLAUDE.md
