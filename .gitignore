@@ -14,6 +14,7 @@ wheels/
 
 # Generated vector store (rebuild with: python -m rag.ingest)
 vector_db/
+vector_pro_db/
 
 # Claude Code working rules (local only)
 CLAUDE.md
